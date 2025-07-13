@@ -2,9 +2,12 @@ import { useState } from 'react';
 
 interface UserData {
   username: string;
-  normalWpm: number;
-  skimmingWpm: number;
-  timestamp: number;
+  normal_wpm?: number;
+  skimming_wpm?: number;
+  genres?: string[];
+  themes?: string[];
+  created_at: string;
+  last_login?: string;
 }
 
 interface HomepageProps {
@@ -49,8 +52,8 @@ const SAMPLE_BOOKS: Book[] = [
 function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: HomepageProps) {
   const [books] = useState<Book[]>(SAMPLE_BOOKS);
 
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
     return date.toLocaleDateString();
   };
 
@@ -81,15 +84,15 @@ function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: Homepage
             <h2 className="text-xl font-semibold text-gray-800 mb-4">Your Reading Profile</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="text-center">
-                <div className="text-2xl font-bold text-gray-800">{userData.normalWpm}</div>
+                <div className="text-2xl font-bold text-gray-800">{userData.normal_wpm || 'Not set'}</div>
                 <div className="text-sm text-gray-600">Normal WPM</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-gray-800">{userData.skimmingWpm}</div>
+                <div className="text-2xl font-bold text-gray-800">{userData.skimming_wpm || 'Not set'}</div>
                 <div className="text-sm text-gray-600">Skimming WPM</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-gray-800">{formatDate(userData.timestamp)}</div>
+                <div className="text-2xl font-bold text-gray-800">{formatDate(userData.created_at)}</div>
                 <div className="text-sm text-gray-600">Profile Created</div>
               </div>
             </div>

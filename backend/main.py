@@ -1,9 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uvicorn
 import time
+import hashlib
+import secrets
+from datetime import datetime, timedelta
+import json
 
 app = FastAPI(
     title="Book Plus AI API",
@@ -36,6 +41,35 @@ class BookCreate(BaseModel):
     isbn: Optional[str] = None
     published_year: Optional[int] = None
 
+# Auth models
+class UserRegister(BaseModel):
+    username: str
+    password: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserProfile(BaseModel):
+    username: str
+    normal_wpm: Optional[int] = None
+    skimming_wpm: Optional[int] = None
+    genres: Optional[List[str]] = None
+    themes: Optional[List[str]] = None
+    created_at: str
+    last_login: Optional[str] = None
+
+class UserProfileUpdate(BaseModel):
+    normal_wpm: Optional[int] = None
+    skimming_wpm: Optional[int] = None
+    genres: Optional[List[str]] = None
+    themes: Optional[List[str]] = None
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserProfile
+
 # In-memory storage (replace with database in production)
 books_db = [
     {
@@ -55,6 +89,47 @@ books_db = [
         "published_year": 1960
     }
 ]
+
+# Auth storage
+users_db: Dict[str, Dict] = {}  # username -> user data
+sessions_db: Dict[str, Dict] = {}  # token -> session data
+
+# Auth utilities
+security = HTTPBearer()
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password: str, hashed: str) -> bool:
+    return hash_password(password) == hashed
+
+def create_access_token(username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    sessions_db[token] = {
+        "username": username,
+        "created_at": datetime.now(),
+        "expires_at": datetime.now() + timedelta(days=7)
+    }
+    return token
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    token = credentials.credentials
+    session = sessions_db.get(token)
+    
+    if not session or session["expires_at"] < datetime.now():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+    
+    username = session["username"]
+    if username not in users_db:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    return username
 
 book1 = """    On Mondays, Wednesdays and Fridays it was Court Hand and Summulae Logicales, while the rest of the week it was the Organon, Repetition and Astrology. The governess was always getting muddled with her astrolabe, and when she got specially muddled she would take it out of the Wart by rapping his knuckles. She did not rap Kay's knuckles, because when Kay grew older he would be Sir Kay, the master of the estate. The Wart was called the Wart because it more or less rhymed with Art, which was short for his real name. Kay had given him the nickname. Kay was not called anything but Kay, as he was too dignified to have a nickname and would have flown into a passion if anybody had tried to give him one. The governess had red hair and some mysterious wound from which she derived a lot of prestige by showing it to all the women of the castle, behind closed doors. It was believed to be where she sat down, and to have been caused by sitting on some armour at a picnic by mistake. Eventually she offered to show it to Sir Ector, who was Kay's father, had hysterics and was sent away. They found out afterwards that she had been in a lunatic hospital for three years.
 
@@ -186,6 +261,141 @@ When he felt the trappings being taken off him, so that he was in hunting order,
 
 # Split book1 into paragraphs
 book1_paragraphs = [p.strip() for p in book1.split('\n\n') if p.strip()]
+
+# Auth endpoints
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def register(user_data: UserRegister):
+    """Register a new user"""
+    if user_data.username in users_db:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists"
+        )
+    
+    # Create user
+    hashed_password = hash_password(user_data.password)
+    now = datetime.now().isoformat()
+    
+    users_db[user_data.username] = {
+        "username": user_data.username,
+        "password_hash": hashed_password,
+        "normal_wpm": None,
+        "skimming_wpm": None,
+        "genres": None,
+        "themes": None,
+        "created_at": now,
+        "last_login": now
+    }
+    
+    # Create token
+    token = create_access_token(user_data.username)
+    
+    # Return user profile without password
+    user_profile = UserProfile(
+        username=user_data.username,
+        normal_wpm=None,
+        skimming_wpm=None,
+        genres=None,
+        themes=None,
+        created_at=now,
+        last_login=now
+    )
+    
+    return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user_profile
+    )
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(user_data: UserLogin):
+    """Login user"""
+    if user_data.username not in users_db:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    user = users_db[user_data.username]
+    if not verify_password(user_data.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    # Update last login
+    now = datetime.now().isoformat()
+    users_db[user_data.username]["last_login"] = now
+    
+    # Create token
+    token = create_access_token(user_data.username)
+    
+    # Return user profile
+    user_profile = UserProfile(
+        username=user["username"],
+        normal_wpm=user["normal_wpm"],
+        skimming_wpm=user["skimming_wpm"],
+        genres=user["genres"],
+        themes=user["themes"],
+        created_at=user["created_at"],
+        last_login=now
+    )
+    
+    return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user_profile
+    )
+
+@app.get("/api/auth/me", response_model=UserProfile)
+async def get_current_user_profile(username: str = Depends(get_current_user)):
+    """Get current user profile"""
+    user = users_db[username]
+    return UserProfile(
+        username=user["username"],
+        normal_wpm=user["normal_wpm"],
+        skimming_wpm=user["skimming_wpm"],
+        genres=user["genres"],
+        themes=user["themes"],
+        created_at=user["created_at"],
+        last_login=user["last_login"]
+    )
+
+@app.put("/api/auth/me", response_model=UserProfile)
+async def update_user_profile(
+    profile_data: UserProfileUpdate,
+    username: str = Depends(get_current_user)
+):
+    """Update current user profile"""
+    user = users_db[username]
+    
+    # Update fields if provided
+    if profile_data.normal_wpm is not None:
+        user["normal_wpm"] = profile_data.normal_wpm
+    if profile_data.skimming_wpm is not None:
+        user["skimming_wpm"] = profile_data.skimming_wpm
+    if profile_data.genres is not None:
+        user["genres"] = profile_data.genres
+    if profile_data.themes is not None:
+        user["themes"] = profile_data.themes
+    
+    return UserProfile(
+        username=user["username"],
+        normal_wpm=user["normal_wpm"],
+        skimming_wpm=user["skimming_wpm"],
+        genres=user["genres"],
+        themes=user["themes"],
+        created_at=user["created_at"],
+        last_login=user["last_login"]
+    )
+
+@app.post("/api/auth/logout")
+async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Logout user (invalidate token)"""
+    token = credentials.credentials
+    if token in sessions_db:
+        del sessions_db[token]
+    return {"message": "Successfully logged out"}
 
 @app.get("/")
 async def root():

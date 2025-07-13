@@ -6,18 +6,53 @@ interface Paragraph {
   index: number;
   isLoading: boolean;
   hasError: boolean;
+  readingClassification?: 'fast-skim' | 'skim' | 'normal' | 'slow' | 'unread';
+}
+
+interface SectionTimingData {
+  paragraphIndex: number;
+  startTime: number;
+  endTime?: number;
+  totalTime: number;
+  scrollBehavior: 'normal' | 'fast' | 'slow';
+  isVisible: boolean;
+  viewportDwellTime: number;
+}
+
+interface ReadingSession {
+  sessionId: string;
+  startTime: number;
+  sectionTimings: SectionTimingData[];
+  scrollEvents: Array<{
+    timestamp: number;
+    scrollTop: number;
+    scrollSpeed: number;
+  }>;
 }
 
 interface ReaderProps {
   onBackToHomepage?: () => void;
+  userData?: any;
 }
 
-function Reader({ onBackToHomepage }: ReaderProps) {
+function Reader({ onBackToHomepage, userData }: ReaderProps) {
   const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
   const [totalParagraphs, setTotalParagraphs] = useState(0);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Reading analytics state
+  const [readingSession, setReadingSession] = useState<ReadingSession>({
+    sessionId: `session_${Date.now()}`,
+    startTime: Date.now(),
+    sectionTimings: [],
+    scrollEvents: []
+  });
+  const sectionRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const intersectionObserver = useRef<IntersectionObserver | null>(null);
+  const lastScrollTime = useRef<number>(Date.now());
+  const lastScrollTop = useRef<number>(0);
 
   // Function to load a specific paragraph
   const loadParagraph = useCallback(async (index: number) => {
@@ -80,12 +115,137 @@ function Reader({ onBackToHomepage }: ReaderProps) {
     initializeReader();
   }, [loadParagraph]);
 
-  // Scroll handler for loading more paragraphs
+  // Analytics: Start section timing
+  const startSectionTiming = useCallback((paragraphIndex: number) => {
+    const now = Date.now();
+    setReadingSession(prev => {
+      const existingIndex = prev.sectionTimings.findIndex(st => st.paragraphIndex === paragraphIndex);
+      if (existingIndex >= 0) {
+        // Update existing timing
+        const updated = [...prev.sectionTimings];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          startTime: now,
+          isVisible: true
+        };
+        return { ...prev, sectionTimings: updated };
+      } else {
+        // Add new timing
+        return {
+          ...prev,
+          sectionTimings: [...prev.sectionTimings, {
+            paragraphIndex,
+            startTime: now,
+            totalTime: 0,
+            scrollBehavior: 'normal',
+            isVisible: true,
+            viewportDwellTime: 0
+          }]
+        };
+      }
+    });
+  }, []);
+
+  // Analytics: Calculate WPM for each section
+  const calculateSectionWPM = useCallback((paragraphIndex: number, dwellTime: number) => {
+    const paragraph = paragraphs.find(p => p.index === paragraphIndex);
+    if (!paragraph || !paragraph.text || dwellTime === 0) return 0;
+    
+    const wordCount = paragraph.text.split(/\\s+/).length;
+    const timeInMinutes = dwellTime / 60000; // Convert ms to minutes
+    return Math.round(wordCount / timeInMinutes);
+  }, [paragraphs]);
+
+  // Update paragraph classification based on reading data and user baseline
+  const updateParagraphClassification = useCallback((paragraphIndex: number, wpm: number) => {
+    let classification: 'fast-skim' | 'skim' | 'normal' | 'slow';
+    
+    if (userData?.normal_wpm && userData?.skimming_wpm) {
+      // Use user's personal baseline for classification
+      const userNormalWpm = userData.normal_wpm;
+      const userSkimWpm = userData.skimming_wpm;
+      
+      if (wpm >= userSkimWpm * 1.5) {
+        classification = 'fast-skim';
+      } else if (wpm >= userNormalWpm * 1.2) {
+        classification = 'skim';
+      } else if (wpm >= userNormalWpm * 0.7) {
+        classification = 'normal';
+      } else {
+        classification = 'slow';
+      }
+    } else {
+      // Fallback to generic thresholds
+      classification = wpm > 300 ? 'fast-skim' : wpm > 150 ? 'skim' : wpm > 50 ? 'normal' : 'slow';
+    }
+    
+    setParagraphs(prev => 
+      prev.map(p => 
+        p.index === paragraphIndex 
+          ? { ...p, readingClassification: classification }
+          : p
+      )
+    );
+  }, [userData]);
+
+  // Analytics: End section timing
+  const endSectionTiming = useCallback((paragraphIndex: number) => {
+    const now = Date.now();
+    setReadingSession(prev => {
+      const updated = prev.sectionTimings.map(st => {
+        if (st.paragraphIndex === paragraphIndex && st.isVisible) {
+          const dwellTime = now - st.startTime;
+          const newTotalTime = st.totalTime + dwellTime;
+          
+          // Calculate WPM and update visual classification
+          const wpm = calculateSectionWPM(paragraphIndex, newTotalTime);
+          if (wpm > 0) {
+            updateParagraphClassification(paragraphIndex, wpm);
+          }
+          
+          return {
+            ...st,
+            endTime: now,
+            totalTime: newTotalTime,
+            viewportDwellTime: st.viewportDwellTime + dwellTime,
+            isVisible: false
+          };
+        }
+        return st;
+      });
+      return { ...prev, sectionTimings: updated };
+    });
+  }, [calculateSectionWPM, updateParagraphClassification]);
+
+  // Analytics: Track scroll behavior
+  const trackScrollEvent = useCallback((scrollTop: number) => {
+    const now = Date.now();
+    const timeDelta = now - lastScrollTime.current;
+    const scrollDelta = Math.abs(scrollTop - lastScrollTop.current);
+    const scrollSpeed = timeDelta > 0 ? scrollDelta / timeDelta : 0;
+
+    setReadingSession(prev => ({
+      ...prev,
+      scrollEvents: [...prev.scrollEvents.slice(-50), { // Keep last 50 events
+        timestamp: now,
+        scrollTop,
+        scrollSpeed
+      }]
+    }));
+
+    lastScrollTime.current = now;
+    lastScrollTop.current = scrollTop;
+  }, []);
+
+  // Scroll handler for loading more paragraphs + analytics
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
     
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
+    
+    // Track scroll for analytics
+    trackScrollEvent(scrollTop);
     
     // If we're near the bottom (80% scrolled), load more paragraphs
     if (scrollPercentage > 0.8) {
@@ -96,8 +256,56 @@ function Reader({ onBackToHomepage }: ReaderProps) {
         addParagraphPlaceholder(nextIndex);
       }
     }
-  }, [paragraphs, totalParagraphs, addParagraphPlaceholder]);
+  }, [paragraphs, totalParagraphs, addParagraphPlaceholder, trackScrollEvent]);
 
+  // Setup Intersection Observer for section visibility tracking
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    intersectionObserver.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const paragraphIndex = parseInt(entry.target.getAttribute('data-paragraph-index') || '0');
+          
+          if (entry.isIntersecting) {
+            // Section entered viewport
+            startSectionTiming(paragraphIndex);
+          } else {
+            // Section left viewport
+            endSectionTiming(paragraphIndex);
+          }
+        });
+      },
+      {
+        root: containerRef.current,
+        rootMargin: '0px',
+        threshold: 0.5 // Trigger when 50% of section is visible
+      }
+    );
+
+    return () => {
+      if (intersectionObserver.current) {
+        intersectionObserver.current.disconnect();
+      }
+    };
+  }, [startSectionTiming, endSectionTiming]);
+
+  // Observe paragraph elements when they're added
+  useEffect(() => {
+    if (!intersectionObserver.current) return;
+
+    sectionRefs.current.forEach((element) => {
+      intersectionObserver.current?.observe(element);
+    });
+
+    return () => {
+      sectionRefs.current.forEach((element) => {
+        intersectionObserver.current?.unobserve(element);
+      });
+    };
+  }, [paragraphs]);
+
+  // Setup scroll listener
   useEffect(() => {
     const container = containerRef.current;
     if (container) {
@@ -105,6 +313,84 @@ function Reader({ onBackToHomepage }: ReaderProps) {
       return () => container.removeEventListener('scroll', handleScroll);
     }
   }, [handleScroll]);
+
+  // Visual: Get CSS classes for reading classification
+  const getClassificationStyle = useCallback((classification?: string) => {
+    switch (classification) {
+      case 'fast-skim':
+        return 'text-gray-400 bg-blue-50 border-l-4 border-blue-300';
+      case 'skim':
+        return 'text-gray-500 bg-yellow-50 border-l-4 border-yellow-300';
+      case 'normal':
+        return 'text-gray-700 bg-green-50 border-l-4 border-green-300';
+      case 'slow':
+        return 'text-gray-800 bg-purple-50 border-l-4 border-purple-300';
+      default:
+        return 'text-gray-800';
+    }
+  }, []);
+
+  // Analytics: Export data to downloadable file
+  const exportAnalyticsData = useCallback(() => {
+    const analyticsData = {
+      sessionId: readingSession.sessionId,
+      sessionDuration: Date.now() - readingSession.startTime,
+      timestamp: new Date().toISOString(),
+      sectionAnalytics: readingSession.sectionTimings.map(st => {
+        const wpm = calculateSectionWPM(st.paragraphIndex, st.totalTime);
+        const paragraph = paragraphs.find(p => p.index === st.paragraphIndex);
+        return {
+          ...st,
+          wordCount: paragraph?.text.split(/\\s+/).length || 0,
+          wpm,
+          classification: wpm > 300 ? 'fast-skim' : wpm > 150 ? 'skim' : wpm > 50 ? 'normal' : 'slow'
+        };
+      }),
+      scrollAnalytics: {
+        totalScrollEvents: readingSession.scrollEvents.length,
+        avgScrollSpeed: readingSession.scrollEvents.reduce((sum, se) => sum + se.scrollSpeed, 0) / readingSession.scrollEvents.length,
+        scrollPattern: readingSession.scrollEvents
+      },
+      summary: {
+        totalSections: readingSession.sectionTimings.length,
+        avgDwellTime: readingSession.sectionTimings.reduce((sum, st) => sum + st.totalTime, 0) / readingSession.sectionTimings.length,
+        avgWPM: readingSession.sectionTimings.reduce((sum, st) => sum + calculateSectionWPM(st.paragraphIndex, st.totalTime), 0) / readingSession.sectionTimings.length
+      }
+    };
+
+    const blob = new Blob([JSON.stringify(analyticsData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reading-analytics-${readingSession.sessionId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [readingSession, calculateSectionWPM, paragraphs]);
+
+  // Analytics: Save session data more frequently and provide export
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (readingSession.sectionTimings.length > 0) {
+        const currentAnalytics = {
+          sessionId: readingSession.sessionId,
+          totalSections: readingSession.sectionTimings.length,
+          avgDwellTime: readingSession.sectionTimings.reduce((sum, st) => sum + st.totalTime, 0) / readingSession.sectionTimings.length,
+          avgWPM: readingSession.sectionTimings.reduce((sum, st) => sum + calculateSectionWPM(st.paragraphIndex, st.totalTime), 0) / readingSession.sectionTimings.length,
+          recentScrollEvents: readingSession.scrollEvents.slice(-10),
+          lastUpdate: Date.now()
+        };
+        
+        console.log('📖 Reading Analytics:', currentAnalytics);
+        
+        // Store in localStorage for persistence
+        localStorage.setItem('currentReadingSession', JSON.stringify(currentAnalytics));
+      }
+    }, 2000); // Update every 2 seconds instead of 10
+
+    return () => clearInterval(interval);
+  }, [readingSession, calculateSectionWPM]);
 
   // Loading animation component
   const LoadingAnimation = () => (
@@ -149,6 +435,67 @@ function Reader({ onBackToHomepage }: ReaderProps) {
               </button>
             </div>
           )}
+
+          {/* Visual Indicators Legend */}
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg border">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Reading Speed Indicators</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="flex items-center">
+                <div className="w-4 h-4 bg-blue-50 border-l-4 border-blue-300 mr-2"></div>
+                <span>Fast Skim</span>
+              </div>
+              <div className="flex items-center">
+                <div className="w-4 h-4 bg-yellow-50 border-l-4 border-yellow-300 mr-2"></div>
+                <span>Skim</span>
+              </div>
+              <div className="flex items-center">
+                <div className="w-4 h-4 bg-green-50 border-l-4 border-green-300 mr-2"></div>
+                <span>Normal</span>
+              </div>
+              <div className="flex items-center">
+                <div className="w-4 h-4 bg-purple-50 border-l-4 border-purple-300 mr-2"></div>
+                <span>Slow</span>
+              </div>
+            </div>
+            {userData?.normal_wpm && userData?.skimming_wpm && (
+              <div className="mt-2 text-xs text-gray-600">
+                Based on your reading speeds: {userData.normal_wpm} WPM (normal), {userData.skimming_wpm} WPM (skim)
+              </div>
+            )}
+          </div>
+
+          {/* Analytics Dashboard */}
+          {readingSession.sectionTimings.length > 0 && (
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-sm font-medium text-gray-700">Reading Analytics</h3>
+                <button
+                  onClick={exportAnalyticsData}
+                  className="px-3 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+                >
+                  Export Data
+                </button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                <div>
+                  <span className="text-gray-500">Sections Read:</span>
+                  <div className="font-medium">{readingSession.sectionTimings.length}</div>
+                </div>
+                <div>
+                  <span className="text-gray-500">Avg Dwell Time:</span>
+                  <div className="font-medium">{(readingSession.sectionTimings.reduce((sum, st) => sum + st.totalTime, 0) / readingSession.sectionTimings.length / 1000).toFixed(1)}s</div>
+                </div>
+                <div>
+                  <span className="text-gray-500">Avg WPM:</span>
+                  <div className="font-medium">{Math.round(readingSession.sectionTimings.reduce((sum, st) => sum + calculateSectionWPM(st.paragraphIndex, st.totalTime), 0) / readingSession.sectionTimings.length)}</div>
+                </div>
+                <div>
+                  <span className="text-gray-500">Session Time:</span>
+                  <div className="font-medium">{Math.round((Date.now() - readingSession.startTime) / 1000)}s</div>
+                </div>
+              </div>
+            </div>
+          )}
           
           {isInitialLoading && (
             <div className="flex items-center justify-center h-full">
@@ -173,7 +520,15 @@ function Reader({ onBackToHomepage }: ReaderProps) {
                     ) : paragraph.hasError ? (
                       <ErrorComponent onRetry={() => loadParagraph(paragraph.index)} />
                     ) : (
-                      <p className="first:indent-0 indent-8">
+                      <p 
+                        className={`first:indent-0 indent-8 p-2 rounded transition-all duration-500 ${getClassificationStyle(paragraph.readingClassification)}`}
+                        ref={(el) => {
+                          if (el) {
+                            sectionRefs.current.set(paragraph.index, el);
+                          }
+                        }}
+                        data-paragraph-index={paragraph.index}
+                      >
                         {paragraph.text}
                       </p>
                     )}
