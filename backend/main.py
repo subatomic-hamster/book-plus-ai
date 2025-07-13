@@ -9,6 +9,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 import json
+import re
 
 app = FastAPI(
     title="Book Plus AI API",
@@ -70,6 +71,35 @@ class AuthResponse(BaseModel):
     token_type: str
     user: UserProfile
 
+# Content Analysis Models
+class ContentSegment(BaseModel):
+    text: str
+    type: str  # 'dialogue', 'description', 'action', 'plot_critical'
+    condensed_text: Optional[str] = None
+    key_sentences: List[str] = []
+    start_pos: int
+    end_pos: int
+
+class AnalyzedParagraph(BaseModel):
+    index: int
+    original_text: str
+    segments: List[ContentSegment]
+    reading_difficulty: float  # 0-1 scale
+    importance_score: float  # 0-1 scale
+    primary_type: str  # dominant content type
+
+class AdaptiveContent(BaseModel):
+    version: str  # 'full', 'condensed', 'summary'
+    text: str
+    highlighted_sentences: List[str] = []
+    emphasis_type: Optional[str] = None  # 'dialogue', 'action', etc.
+
+class ReadingPattern(BaseModel):
+    content_type: str
+    avg_wpm: float
+    preference_score: float  # how much user likes this content type
+    attention_level: float  # how carefully they read it
+
 # In-memory storage (replace with database in production)
 books_db = [
     {
@@ -130,6 +160,143 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         )
     
     return username
+
+# Content Analysis Functions
+def classify_content_type(text: str) -> str:
+    """Classify text segment by type"""
+    # Count dialogue indicators
+    dialogue_quotes = len(re.findall(r'"[^"]*"', text))
+    dialogue_ratio = dialogue_quotes / max(1, len(text.split('.')))
+    
+    # Action keywords
+    action_keywords = ['ran', 'jumped', 'moved', 'rushed', 'fell', 'struck', 'threw', 'caught', 'grabbed', 'shouted', 'cried']
+    action_count = sum(1 for word in action_keywords if word in text.lower())
+    
+    # Description keywords  
+    desc_keywords = ['was', 'were', 'had', 'looked', 'seemed', 'appeared', 'beautiful', 'tall', 'small', 'old', 'young']
+    desc_count = sum(1 for word in desc_keywords if word in text.lower())
+    
+    # Plot keywords
+    plot_keywords = ['suddenly', 'then', 'but', 'however', 'because', 'therefore', 'decided', 'realized', 'discovered']
+    plot_count = sum(1 for word in plot_keywords if word in text.lower())
+    
+    if dialogue_ratio > 0.3:
+        return 'dialogue'
+    elif action_count > desc_count and action_count > 2:
+        return 'action'
+    elif plot_count > 2:
+        return 'plot_critical'
+    else:
+        return 'description'
+
+def condense_descriptive_text(text: str) -> str:
+    """Create condensed version of descriptive passages"""
+    sentences = re.split(r'[.!?]+', text)
+    
+    # Keep first and last sentences, plus any with plot keywords
+    plot_keywords = ['but', 'however', 'then', 'suddenly', 'decided', 'realized']
+    important_sentences = []
+    
+    for i, sentence in enumerate(sentences):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # Always keep first and last
+        if i == 0 or i == len(sentences) - 1:
+            important_sentences.append(sentence)
+        # Keep sentences with plot keywords
+        elif any(keyword in sentence.lower() for keyword in plot_keywords):
+            important_sentences.append(sentence)
+        # Keep short, punchy sentences
+        elif len(sentence.split()) < 8:
+            important_sentences.append(sentence)
+    
+    return '. '.join(important_sentences) + '.'
+
+def extract_key_sentences(text: str) -> List[str]:
+    """Extract key sentences for highlighting"""
+    sentences = re.split(r'[.!?]+', text)
+    key_sentences = []
+    
+    # Keywords that indicate important content
+    key_indicators = [
+        'decided', 'realized', 'discovered', 'suddenly', 'then', 'but', 'however',
+        'never', 'always', 'must', 'should', 'would', 'could', 'might'
+    ]
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # Check for key indicators
+        if any(indicator in sentence.lower() for indicator in key_indicators):
+            key_sentences.append(sentence + '.')
+        # Include dialogue
+        elif '"' in sentence:
+            key_sentences.append(sentence + '.')
+            
+    return key_sentences[:3]  # Limit to top 3
+
+def calculate_importance_score(text: str) -> float:
+    """Calculate importance score based on content"""
+    # More dialogue and action = higher importance
+    dialogue_count = len(re.findall(r'"[^"]*"', text))
+    action_keywords = ['ran', 'jumped', 'moved', 'shouted', 'cried', 'struck']
+    action_count = sum(1 for word in action_keywords if word in text.lower())
+    
+    # Plot advancement keywords
+    plot_keywords = ['decided', 'realized', 'discovered', 'then', 'suddenly']
+    plot_count = sum(1 for word in plot_keywords if word in text.lower())
+    
+    score = (dialogue_count * 0.3) + (action_count * 0.4) + (plot_count * 0.5)
+    return min(1.0, score / 5.0)  # Normalize to 0-1
+
+def analyze_paragraph(text: str, index: int) -> AnalyzedParagraph:
+    """Analyze a paragraph and return structured content"""
+    segments = []
+    
+    # Split by sentences for basic segmentation
+    sentences = re.split(r'[.!?]+', text)
+    current_pos = 0
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        content_type = classify_content_type(sentence)
+        
+        segment = ContentSegment(
+            text=sentence + '.',
+            type=content_type,
+            condensed_text=condense_descriptive_text(sentence + '.') if content_type == 'description' else None,
+            key_sentences=extract_key_sentences(sentence + '.') if content_type in ['plot_critical', 'dialogue'] else [],
+            start_pos=current_pos,
+            end_pos=current_pos + len(sentence)
+        )
+        segments.append(segment)
+        current_pos += len(sentence) + 1
+    
+    # Determine primary type
+    type_counts = {}
+    for segment in segments:
+        type_counts[segment.type] = type_counts.get(segment.type, 0) + 1
+    
+    primary_type = max(type_counts.items(), key=lambda x: x[1])[0] if type_counts else 'description'
+    
+    return AnalyzedParagraph(
+        index=index,
+        original_text=text,
+        segments=segments,
+        reading_difficulty=len(text.split()) / 50.0,  # Rough difficulty based on length
+        importance_score=calculate_importance_score(text),
+        primary_type=primary_type
+    )
+
+# Storage for reading patterns
+user_reading_patterns: Dict[str, Dict[str, ReadingPattern]] = {}  # username -> content_type -> pattern
 
 book1 = """    On Mondays, Wednesdays and Fridays it was Court Hand and Summulae Logicales, while the rest of the week it was the Organon, Repetition and Astrology. The governess was always getting muddled with her astrolabe, and when she got specially muddled she would take it out of the Wart by rapping his knuckles. She did not rap Kay's knuckles, because when Kay grew older he would be Sir Kay, the master of the estate. The Wart was called the Wart because it more or less rhymed with Art, which was short for his real name. Kay had given him the nickname. Kay was not called anything but Kay, as he was too dignified to have a nickname and would have flown into a passion if anybody had tried to give him one. The governess had red hair and some mysterious wound from which she derived a lot of prestige by showing it to all the women of the castle, behind closed doors. It was believed to be where she sat down, and to have been caused by sitting on some armour at a picnic by mistake. Eventually she offered to show it to Sir Ector, who was Kay's father, had hysterics and was sent away. They found out afterwards that she had been in a lunatic hospital for three years.
 
@@ -417,6 +584,133 @@ async def get_book1_paragraph(paragraph_index: int):
     if paragraph_index < 0 or paragraph_index >= len(book1_paragraphs):
         raise HTTPException(status_code=404, detail="Paragraph not found")
     return {"text": book1_paragraphs[paragraph_index], "index": paragraph_index}
+
+# Adaptive Content Endpoints
+@app.get("/api/book1/paragraphs/{paragraph_index}/analyze", response_model=AnalyzedParagraph)
+async def get_analyzed_paragraph(paragraph_index: int):
+    """Get analyzed paragraph with content classification"""
+    if paragraph_index < 0 or paragraph_index >= len(book1_paragraphs):
+        raise HTTPException(status_code=404, detail="Paragraph not found")
+    
+    text = book1_paragraphs[paragraph_index]
+    return analyze_paragraph(text, paragraph_index)
+
+@app.get("/api/book1/paragraphs/{paragraph_index}/adaptive")
+async def get_adaptive_paragraph(
+    paragraph_index: int, 
+    version: str = "full",
+    username: str = Depends(get_current_user)
+):
+    """Get adaptive version of paragraph based on user reading patterns"""
+    if paragraph_index < 0 or paragraph_index >= len(book1_paragraphs):
+        raise HTTPException(status_code=404, detail="Paragraph not found")
+    
+    text = book1_paragraphs[paragraph_index]
+    analyzed = analyze_paragraph(text, paragraph_index)
+    
+    # Get user's reading patterns for this content type
+    user_patterns = user_reading_patterns.get(username, {})
+    content_pattern = user_patterns.get(analyzed.primary_type)
+    
+    # Determine best version based on patterns
+    if version == "auto" and content_pattern:
+        if content_pattern.attention_level < 0.3:  # User typically skims this content
+            version = "condensed"
+        elif content_pattern.preference_score > 0.7:  # User loves this content type
+            version = "full"
+        else:
+            version = "summary"
+    
+    # Generate adaptive content
+    if version == "condensed":
+        # Show condensed version with key highlights
+        condensed_segments = []
+        highlights = []
+        
+        for segment in analyzed.segments:
+            if segment.type in ['plot_critical', 'dialogue']:
+                condensed_segments.append(segment.text)
+                highlights.extend(segment.key_sentences)
+            elif segment.condensed_text:
+                condensed_segments.append(segment.condensed_text)
+        
+        adaptive_text = ' '.join(condensed_segments)
+        
+    elif version == "summary":
+        # Ultra-condensed version with just key points
+        key_segments = [s for s in analyzed.segments if s.type in ['plot_critical', 'dialogue']]
+        adaptive_text = ' '.join([s.text for s in key_segments])
+        highlights = []
+        for segment in key_segments:
+            highlights.extend(segment.key_sentences)
+            
+    else:  # full version
+        adaptive_text = text
+        highlights = []
+        for segment in analyzed.segments:
+            if segment.type in ['plot_critical', 'dialogue']:
+                highlights.extend(segment.key_sentences)
+    
+    return AdaptiveContent(
+        version=version,
+        text=adaptive_text,
+        highlighted_sentences=highlights,
+        emphasis_type=analyzed.primary_type
+    )
+
+@app.post("/api/reading-patterns/{username}")
+async def update_reading_pattern(
+    username: str,
+    content_type: str,
+    wpm: float,
+    dwell_time: float,
+    current_user: str = Depends(get_current_user)
+):
+    """Update user's reading pattern for a content type"""
+    if current_user != username:
+        raise HTTPException(status_code=403, detail="Cannot update other user's patterns")
+    
+    if username not in user_reading_patterns:
+        user_reading_patterns[username] = {}
+    
+    # Calculate attention level based on WPM vs user's normal speed
+    user_data = users_db.get(username, {})
+    normal_wpm = user_data.get('normal_wpm', 200)
+    
+    attention_level = min(1.0, normal_wpm / max(wpm, 50))  # Higher attention = slower reading
+    preference_score = min(1.0, dwell_time / 10.0)  # Longer time = higher preference
+    
+    # Update or create pattern
+    if content_type in user_reading_patterns[username]:
+        existing = user_reading_patterns[username][content_type]
+        # Weighted average with existing data
+        weight = 0.3  # New data weight
+        user_reading_patterns[username][content_type] = ReadingPattern(
+            content_type=content_type,
+            avg_wpm=(existing.avg_wpm * (1 - weight)) + (wpm * weight),
+            preference_score=(existing.preference_score * (1 - weight)) + (preference_score * weight),
+            attention_level=(existing.attention_level * (1 - weight)) + (attention_level * weight)
+        )
+    else:
+        user_reading_patterns[username][content_type] = ReadingPattern(
+            content_type=content_type,
+            avg_wpm=wpm,
+            preference_score=preference_score,
+            attention_level=attention_level
+        )
+    
+    return {"status": "updated", "pattern": user_reading_patterns[username][content_type]}
+
+@app.get("/api/reading-patterns/{username}")
+async def get_reading_patterns(
+    username: str,
+    current_user: str = Depends(get_current_user)
+):
+    """Get user's reading patterns"""
+    if current_user != username:
+        raise HTTPException(status_code=403, detail="Cannot access other user's patterns")
+    
+    return user_reading_patterns.get(username, {})
 
 @app.get("/api/books", response_model=List[Book])
 async def get_books():

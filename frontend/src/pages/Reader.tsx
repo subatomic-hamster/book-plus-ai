@@ -7,6 +7,34 @@ interface Paragraph {
   isLoading: boolean;
   hasError: boolean;
   readingClassification?: 'fast-skim' | 'skim' | 'normal' | 'slow' | 'unread';
+  adaptiveContent?: AdaptiveContent;
+  contentType?: string;
+  importanceScore?: number;
+}
+
+interface AdaptiveContent {
+  version: string;
+  text: string;
+  highlighted_sentences: string[];
+  emphasis_type?: string;
+}
+
+interface ContentSegment {
+  text: string;
+  type: string;
+  condensed_text?: string;
+  key_sentences: string[];
+  start_pos: number;
+  end_pos: number;
+}
+
+interface AnalyzedParagraph {
+  index: number;
+  original_text: string;
+  segments: ContentSegment[];
+  reading_difficulty: number;
+  importance_score: number;
+  primary_type: string;
 }
 
 interface SectionTimingData {
@@ -42,6 +70,11 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Adaptive content state
+  const [contentVersion, setContentVersion] = useState<'full' | 'condensed' | 'summary' | 'auto'>('auto');
+  const [analyzedParagraphs, setAnalyzedParagraphs] = useState<Map<number, AnalyzedParagraph>>(new Map());
+  const [readingPatterns, setReadingPatterns] = useState<Record<string, any>>({});
+  
   // Reading analytics state
   const [readingSession, setReadingSession] = useState<ReadingSession>({
     sessionId: `session_${Date.now()}`,
@@ -54,14 +87,44 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
   const lastScrollTime = useRef<number>(Date.now());
   const lastScrollTop = useRef<number>(0);
 
-  // Function to load a specific paragraph
+  // Function to load a specific paragraph with adaptive content
   const loadParagraph = useCallback(async (index: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}`);
+      // Load basic paragraph
+      const basicResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}`);
+      
+      // Load analyzed version
+      const analyzedResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/analyze`);
+      const analyzed: AnalyzedParagraph = analyzedResponse.data;
+      setAnalyzedParagraphs(prev => new Map(prev.set(index, analyzed)));
+      
+      // Load adaptive content
+      let adaptiveContent: AdaptiveContent | undefined;
+      try {
+        const adaptiveResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/adaptive?version=${contentVersion}`);
+        adaptiveContent = adaptiveResponse.data;
+      } catch (adaptiveErr) {
+        // Fallback to basic content if adaptive fails
+        adaptiveContent = {
+          version: 'full',
+          text: basicResponse.data.text,
+          highlighted_sentences: [],
+          emphasis_type: analyzed.primary_type
+        };
+      }
+      
       setParagraphs(prev => 
         prev.map(p => 
           p.index === index 
-            ? { ...p, text: response.data.text, isLoading: false, hasError: false }
+            ? { 
+                ...p, 
+                text: basicResponse.data.text, 
+                isLoading: false, 
+                hasError: false,
+                adaptiveContent,
+                contentType: analyzed.primary_type,
+                importanceScore: analyzed.importance_score
+              }
             : p
         )
       );
@@ -74,7 +137,7 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
         )
       );
     }
-  }, []);
+  }, [contentVersion]);
 
   // Function to add a new paragraph placeholder
   const addParagraphPlaceholder = useCallback((index: number) => {
@@ -201,6 +264,7 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
           const wpm = calculateSectionWPM(paragraphIndex, newTotalTime);
           if (wpm > 0) {
             updateParagraphClassification(paragraphIndex, wpm);
+            updateReadingPattern(paragraphIndex, wpm, dwellTime);
           }
           
           return {
@@ -330,6 +394,60 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
     }
   }, []);
 
+  // Update reading pattern based on reading behavior
+  const updateReadingPattern = useCallback(async (paragraphIndex: number, wpm: number, dwellTime: number) => {
+    if (!userData?.username) return;
+
+    const analyzed = analyzedParagraphs.get(paragraphIndex);
+    if (!analyzed) return;
+
+    try {
+      await axios.post(`http://localhost:8000/api/reading-patterns/${userData.username}`, null, {
+        params: {
+          content_type: analyzed.primary_type,
+          wpm,
+          dwell_time: dwellTime / 1000 // Convert to seconds
+        }
+      });
+    } catch (error) {
+      console.error('Failed to update reading pattern:', error);
+    }
+  }, [userData, analyzedParagraphs]);
+
+  // Reload adaptive content when version changes
+  const reloadAdaptiveContent = useCallback(async () => {
+    const loadedParagraphs = paragraphs.filter(p => !p.isLoading && !p.hasError);
+    
+    for (const paragraph of loadedParagraphs) {
+      try {
+        const adaptiveResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${paragraph.index}/adaptive?version=${contentVersion}`);
+        const adaptiveContent: AdaptiveContent = adaptiveResponse.data;
+        
+        setParagraphs(prev => 
+          prev.map(p => 
+            p.index === paragraph.index 
+              ? { ...p, adaptiveContent }
+              : p
+          )
+        );
+      } catch (error) {
+        console.error(`Failed to reload adaptive content for paragraph ${paragraph.index}:`, error);
+      }
+    }
+  }, [paragraphs, contentVersion]);
+
+  // Handle content version change
+  const handleVersionChange = useCallback((newVersion: 'full' | 'condensed' | 'summary' | 'auto') => {
+    setContentVersion(newVersion);
+  }, []);
+
+  // Effect to reload content when version changes
+  useEffect(() => {
+    if (paragraphs.length > 0) {
+      reloadAdaptiveContent();
+    }
+  }, [contentVersion]);
+
   // Analytics: Export data to downloadable file
   const exportAnalyticsData = useCallback(() => {
     const analyticsData = {
@@ -418,6 +536,52 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
     </div>
   );
 
+  // Content type indicator
+  const ContentTypeIndicator = ({ type, importance }: { type?: string, importance?: number }) => {
+    if (!type) return null;
+    
+    const getTypeColor = (type: string) => {
+      switch (type) {
+        case 'dialogue': return 'bg-blue-100 text-blue-800';
+        case 'action': return 'bg-red-100 text-red-800';
+        case 'plot_critical': return 'bg-orange-100 text-orange-800';
+        case 'description': return 'bg-gray-100 text-gray-800';
+        default: return 'bg-gray-100 text-gray-800';
+      }
+    };
+
+    return (
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`px-2 py-1 text-xs rounded-full ${getTypeColor(type)}`}>
+          {type.replace('_', ' ')}
+        </span>
+        {importance !== undefined && (
+          <span className="text-xs text-gray-500">
+            Importance: {Math.round(importance * 100)}%
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  // Highlight key sentences in text
+  const renderHighlightedText = (text: string, highlightedSentences: string[]) => {
+    if (highlightedSentences.length === 0) {
+      return text;
+    }
+
+    let highlightedText = text;
+    highlightedSentences.forEach(sentence => {
+      const cleanSentence = sentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape regex chars
+      const regex = new RegExp(`(${cleanSentence})`, 'gi');
+      highlightedText = highlightedText.replace(regex, '<mark class="bg-yellow-200 px-1 rounded">$1</mark>');
+    });
+
+    return (
+      <span dangerouslySetInnerHTML={{ __html: highlightedText }} />
+    );
+  };
+
   return (
     <div className="min-h-screen bg-white">
       <div 
@@ -435,6 +599,29 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
               </button>
             </div>
           )}
+
+          {/* Adaptive Content Controls */}
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg border">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-medium text-gray-700">Content Adaptation</h3>
+              <select 
+                value={contentVersion} 
+                onChange={(e) => handleVersionChange(e.target.value as any)}
+                className="px-2 py-1 text-xs border rounded bg-white"
+              >
+                <option value="auto">Auto-Adapt</option>
+                <option value="full">Full Text</option>
+                <option value="condensed">Condensed</option>
+                <option value="summary">Summary</option>
+              </select>
+            </div>
+            <div className="text-xs text-gray-600">
+              {contentVersion === 'auto' ? 'Text adapts based on your reading patterns' :
+               contentVersion === 'full' ? 'Complete original text with key highlights' :
+               contentVersion === 'condensed' ? 'Shortened descriptions, full dialogue & action' :
+               'Key plot points and dialogue only'}
+            </div>
+          </div>
 
           {/* Visual Indicators Legend */}
           <div className="mb-4 p-3 bg-gray-50 rounded-lg border">
@@ -520,17 +707,58 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
                     ) : paragraph.hasError ? (
                       <ErrorComponent onRetry={() => loadParagraph(paragraph.index)} />
                     ) : (
-                      <p 
-                        className={`first:indent-0 indent-8 p-2 rounded transition-all duration-500 ${getClassificationStyle(paragraph.readingClassification)}`}
-                        ref={(el) => {
-                          if (el) {
-                            sectionRefs.current.set(paragraph.index, el);
-                          }
-                        }}
-                        data-paragraph-index={paragraph.index}
-                      >
-                        {paragraph.text}
-                      </p>
+                      <div className="mb-4">
+                        <ContentTypeIndicator 
+                          type={paragraph.contentType} 
+                          importance={paragraph.importanceScore} 
+                        />
+                        <div 
+                          className={`p-3 rounded transition-all duration-500 ${getClassificationStyle(paragraph.readingClassification)}`}
+                          ref={(el) => {
+                            if (el) {
+                              sectionRefs.current.set(paragraph.index, el);
+                            }
+                          }}
+                          data-paragraph-index={paragraph.index}
+                        >
+                          {paragraph.adaptiveContent ? (
+                            <div>
+                              {paragraph.adaptiveContent.version !== 'full' && (
+                                <div className="text-xs text-gray-500 mb-2 italic">
+                                  {paragraph.adaptiveContent.version === 'condensed' ? 'Condensed view' : 'Summary view'}
+                                </div>
+                              )}
+                              <p className="first:indent-0 indent-8 leading-relaxed">
+                                {renderHighlightedText(
+                                  paragraph.adaptiveContent.text,
+                                  paragraph.adaptiveContent.highlighted_sentences
+                                )}
+                              </p>
+                              {paragraph.adaptiveContent.version !== 'full' && (
+                                <button 
+                                  onClick={() => {
+                                    // Toggle to full view for this paragraph
+                                    setParagraphs(prev => 
+                                      prev.map(p => 
+                                        p.index === paragraph.index 
+                                          ? { ...p, adaptiveContent: { ...p.adaptiveContent!, version: 'full', text: p.text } }
+                                          : p
+                                      )
+                                    );
+                                  }}
+                                  className="text-xs text-blue-600 hover:text-blue-800 mt-2 underline"
+                                >
+                                  Show full text
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="first:indent-0 indent-8 leading-relaxed">
+                              {paragraph.text}
+                            </p>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
                 ))}
