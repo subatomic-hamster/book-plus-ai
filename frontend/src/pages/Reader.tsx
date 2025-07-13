@@ -8,7 +8,11 @@ interface Paragraph {
   hasError: boolean;
 }
 
-function Reader() {
+interface ReaderProps {
+  onBackToHomepage?: () => void;
+}
+
+function Reader({ onBackToHomepage }: ReaderProps) {
   const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
   const [totalParagraphs, setTotalParagraphs] = useState(0);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -135,6 +139,17 @@ function Reader() {
         className="h-screen max-w-4xl mx-auto bg-white shadow-[5px_0_15px_rgba(0,0,0,0.1),-5px_0_15px_rgba(0,0,0,0.1)] overflow-y-auto"
       >
         <div className="p-8">
+          {onBackToHomepage && (
+            <div className="mb-6 pb-4 border-b border-gray-200">
+              <button
+                onClick={onBackToHomepage}
+                className="text-gray-600 hover:text-gray-800 text-sm flex items-center"
+              >
+                ← Back to Library
+              </button>
+            </div>
+          )}
+          
           {isInitialLoading && (
             <div className="flex items-center justify-center h-full">
               <p className="text-gray-600 text-lg">Loading book...</p>
