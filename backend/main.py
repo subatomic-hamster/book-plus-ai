@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn
+import time
 
 app = FastAPI(
     title="Book Plus AI API",
@@ -183,6 +184,9 @@ When he felt the trappings being taken off him, so that he was in hunting order,
 
 "So–ho!" cried Kay, throwing his arm upward to give the hawk a better take–off, and a rabbit was scooting across the close–nibbled turf in front of them, and Cully was in the air. The movement had surprised the Wart, the rabbit and the hawk, all three, and all three hung a moment in surprise. Then the great wings of the aerial assassin began to row the air, but reluctant and undecided. The rabbit vanished in a hidden hole. Up went the hawk, swooping like a child flung high in a swing, until the wings folded and he was sitting in a tree. Cully looked down at his masters, opened his beak in an angry pant of failure, and remained motionless. The two hearts stood still."""
 
+# Split book1 into paragraphs
+book1_paragraphs = [p.strip() for p in book1.split('\n\n') if p.strip()]
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to Book Plus AI API"}
@@ -191,6 +195,18 @@ async def root():
 async def get_book1():
     """Get the book1 text"""
     return {"text": book1}
+
+@app.get("/api/book1/paragraphs")
+async def get_book1_paragraphs():
+    """Get the total number of paragraphs in book1"""
+    return {"total_paragraphs": len(book1_paragraphs)}
+
+@app.get("/api/book1/paragraphs/{paragraph_index}")
+async def get_book1_paragraph(paragraph_index: int):
+    """Get a specific paragraph by index"""
+    if paragraph_index < 0 or paragraph_index >= len(book1_paragraphs):
+        raise HTTPException(status_code=404, detail="Paragraph not found")
+    return {"text": book1_paragraphs[paragraph_index], "index": paragraph_index}
 
 @app.get("/api/books", response_model=List[Book])
 async def get_books():
