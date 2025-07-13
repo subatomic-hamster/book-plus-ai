@@ -48,7 +48,10 @@ function Auth({ onAuth }: AuthProps) {
   return (
     <div className="min-h-screen bg-white">
       <div className="h-screen max-w-4xl mx-auto bg-white shadow-[5px_0_15px_rgba(0,0,0,0.1),-5px_0_15px_rgba(0,0,0,0.1)] flex items-center justify-center">
-        <div className="max-w-md w-full space-y-8 p-8">
+        <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-xl shadow-lg border border-gray-200">
+          <div className="text-center">
+            <h1 className="text-4xl font-bold text-gray-900 mb-2">DynamInk</h1>
+          </div>
           <div>
             <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-800">
               {isLogin ? 'Sign in to your account' : 'Create your account'}
