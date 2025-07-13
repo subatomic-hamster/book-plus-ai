@@ -40,6 +40,7 @@ const THEMES = [
 ];
 
 function Landing({ username, onComplete }: LandingProps) {
+  const [currentSection, setCurrentSection] = useState<'normal' | 'skimming' | 'genres' | 'themes'>('normal');
   const [currentTest, setCurrentTest] = useState<'normal' | 'skimming' | null>(null);
   const [currentPassageIndex, setCurrentPassageIndex] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
@@ -111,6 +112,16 @@ function Landing({ username, onComplete }: LandingProps) {
     }
   };
 
+  const handleContinueToNext = () => {
+    if (currentSection === 'normal') {
+      setCurrentSection('skimming');
+    } else if (currentSection === 'skimming') {
+      setCurrentSection('genres');
+    } else if (currentSection === 'genres') {
+      setCurrentSection('themes');
+    }
+  };
+
   const getAverageWpm = (results: TestResult[]) => {
     if (results.length === 0) return 0;
     const total = results.reduce((sum, result) => sum + result.wpm, 0);
@@ -153,8 +164,38 @@ function Landing({ username, onComplete }: LandingProps) {
 
   const isNormalComplete = normalResults.length === NORMAL_TEXTS.length;
   const isSkimmingComplete = skimmingResults.length === SKIMMING_TEXTS.length;
-  const hasPreferences = selectedGenres.length > 0 && selectedThemes.length > 0;
-  const canProceed = isNormalComplete && isSkimmingComplete && hasPreferences;
+  const hasGenres = selectedGenres.length > 0;
+  const hasThemes = selectedThemes.length > 0;
+  const canProceed = isNormalComplete && isSkimmingComplete && hasGenres && hasThemes;
+
+  const renderProgressIndicator = () => (
+    <div className="flex justify-center mb-8">
+      <div className="flex space-x-4">
+        {['normal', 'skimming', 'genres', 'themes'].map((section, index) => (
+          <div
+            key={section}
+            className={`flex items-center ${index > 0 ? 'ml-2' : ''}`}
+          >
+            {index > 0 && <div className="w-8 h-0.5 bg-gray-300 mr-2"></div>}
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                currentSection === section
+                  ? 'bg-gray-700 text-white'
+                  : section === 'normal' && isNormalComplete ||
+                    section === 'skimming' && isSkimmingComplete ||
+                    section === 'genres' && hasGenres ||
+                    section === 'themes' && hasThemes
+                  ? 'bg-green-500 text-white'
+                  : 'bg-gray-200 text-gray-500'
+              }`}
+            >
+              {index + 1}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-white">
@@ -165,255 +206,280 @@ function Landing({ username, onComplete }: LandingProps) {
               Welcome, {username}!
             </h1>
             <p className="text-lg text-gray-600">
-              Let's measure your reading speeds to personalize your experience
+              Let's set up your personalized reading experience
             </p>
           </div>
 
-          <div className="space-y-8">
-            {/* Normal Reading Test */}
-            <div className="border border-gray-200 rounded-lg p-6">
-              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
-                Normal Reading Speed Test
-              </h2>
-              <p className="text-gray-600 mb-4">
-                Read {NORMAL_TEXTS.length} passages at your normal reading pace. Click "Start" to begin timing each passage.
-              </p>
-              
-              {normalResults.length > 0 && (
-                <div className="mb-4 p-3 bg-gray-100 rounded-md">
-                  <p className="text-gray-700 text-sm">
-                    Completed: {normalResults.length}/{NORMAL_TEXTS.length} passages
-                    {normalResults.map((result, i) => (
-                      <span key={i} className="ml-2 text-gray-600">
-                        P{i+1}: {result.wpm} WPM
-                      </span>
-                    ))}
-                  </p>
-                </div>
-              )}
+          {renderProgressIndicator()}
 
-              {!currentTest && !isNormalComplete && (
-                <button
-                  onClick={() => startReading('normal')}
-                  className="mb-4 bg-gray-700 text-white px-6 py-2 rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
-                >
-                  {normalResults.length === 0 ? 'Start Normal Reading Test' : 'Continue Normal Reading Test'}
-                </button>
-              )}
-
-              {currentTest === 'normal' && (
-                <div className="mb-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-gray-700 font-medium">
-                      Passage {currentPassageIndex + 1} of {NORMAL_TEXTS.length}
-                    </span>
-                    {testPhase === 'ready' && (
-                      <button
-                        onClick={startTiming}
-                        className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-                      >
-                        Start Reading
-                      </button>
-                    )}
-                    {testPhase === 'reading' && (
-                      <button
-                        onClick={finishPassage}
-                        className="bg-red-600 text-white px-6 py-2 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
-                      >
-                        Finish Passage
-                      </button>
-                    )}
-                  </div>
-                  
-                  {testPhase === 'reading' && (
-                    <div className="mb-4 p-2 bg-green-100 rounded-md">
-                      <p className="text-green-800 text-sm font-medium">Timer active - read at your normal pace</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {(currentTest === 'normal' || isNormalComplete) && (
-                <div className="bg-gray-100 p-4 rounded-md text-gray-800 leading-relaxed text-base mb-6">
-                  {getCurrentText() || NORMAL_TEXTS[0]}
-                </div>
-              )}
-
-              {isNormalComplete && (
-                <div className="p-4 bg-green-100 rounded-md">
-                  <p className="text-green-800 font-medium">
-                    Normal reading test complete! Average: {getAverageWpm(normalResults)} WPM
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Skimming Reading Test */}
-            <div className="border border-gray-200 rounded-lg p-6">
-              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
-                Skimming Speed Test
-              </h2>
-              <p className="text-gray-600 mb-4">
-                Skim through {SKIMMING_TEXTS.length} passages quickly to get the general idea. Don't worry about understanding every detail.
-              </p>
-              
-              {skimmingResults.length > 0 && (
-                <div className="mb-4 p-3 bg-gray-100 rounded-md">
-                  <p className="text-gray-700 text-sm">
-                    Completed: {skimmingResults.length}/{SKIMMING_TEXTS.length} passages
-                    {skimmingResults.map((result, i) => (
-                      <span key={i} className="ml-2 text-gray-600">
-                        P{i+1}: {result.wpm} WPM
-                      </span>
-                    ))}
-                  </p>
-                </div>
-              )}
-
-              {!currentTest && !isSkimmingComplete && (
-                <button
-                  onClick={() => startReading('skimming')}
-                  disabled={!isNormalComplete}
-                  className={`mb-4 px-6 py-2 rounded-md focus:outline-none focus:ring-2 ${
-                    isNormalComplete 
-                      ? 'bg-purple-600 text-white hover:bg-purple-700 focus:ring-purple-500' 
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  {skimmingResults.length === 0 ? 'Start Skimming Test' : 'Continue Skimming Test'}
-                </button>
-              )}
-
-              {currentTest === 'skimming' && (
-                <div className="mb-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <span className="text-gray-700 font-medium">
-                      Passage {currentPassageIndex + 1} of {SKIMMING_TEXTS.length}
-                    </span>
-                    {testPhase === 'ready' && (
-                      <button
-                        onClick={startTiming}
-                        className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-                      >
-                        Start Skimming
-                      </button>
-                    )}
-                    {testPhase === 'reading' && (
-                      <button
-                        onClick={finishPassage}
-                        className="bg-red-600 text-white px-6 py-2 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
-                      >
-                        Finish Passage
-                      </button>
-                    )}
-                  </div>
-                  
-                  {testPhase === 'reading' && (
-                    <div className="mb-4 p-2 bg-purple-100 rounded-md">
-                      <p className="text-purple-800 text-sm font-medium">Timer active - skim for main ideas only</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {(currentTest === 'skimming' || isSkimmingComplete) && (
-                <div className="bg-gray-100 p-4 rounded-md text-gray-800 leading-relaxed text-base mb-6">
-                  {getCurrentText() || SKIMMING_TEXTS[0]}
-                </div>
-              )}
-
-              {isSkimmingComplete && (
-                <div className="p-4 bg-green-100 rounded-md">
-                  <p className="text-green-800 font-medium">
-                    Skimming test complete! Average: {getAverageWpm(skimmingResults)} WPM
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Genre Selection */}
-            <div className="border border-gray-200 rounded-lg p-6">
-              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
-                Genre Preferences
-              </h2>
-              <p className="text-gray-600 mb-4">
-                Select your favorite genres for personalized book recommendations (choose at least one):
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {GENRES.map((genre) => (
-                  <button
-                    key={genre}
-                    onClick={() => toggleGenre(genre)}
-                    className={`p-3 rounded-md text-sm font-medium transition-colors ${
-                      selectedGenres.includes(genre)
-                        ? 'bg-gray-700 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    {genre}
-                  </button>
-                ))}
-              </div>
-              {selectedGenres.length > 0 && (
-                <div className="mt-4 p-3 bg-green-100 rounded-md">
-                  <p className="text-green-800 text-sm">
-                    Selected: {selectedGenres.join(', ')}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Theme Selection */}
-            <div className="border border-gray-200 rounded-lg p-6">
-              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
-                Mood & Theme Preferences
-              </h2>
-              <p className="text-gray-600 mb-4">
-                What kind of emotional tone do you enjoy in your reading? (choose at least one):
-              </p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {THEMES.map((theme) => (
-                  <button
-                    key={theme}
-                    onClick={() => toggleTheme(theme)}
-                    className={`p-3 rounded-md text-sm font-medium transition-colors ${
-                      selectedThemes.includes(theme)
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    {theme}
-                  </button>
-                ))}
-              </div>
-              {selectedThemes.length > 0 && (
-                <div className="mt-4 p-3 bg-green-100 rounded-md">
-                  <p className="text-green-800 text-sm">
-                    Selected: {selectedThemes.join(', ')}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Complete Button */}
-            <div className="text-center">
-              <button
-                onClick={handleComplete}
-                disabled={!canProceed}
-                className={`px-8 py-3 rounded-md text-lg font-medium focus:outline-none focus:ring-2 ${
-                  canProceed
-                    ? 'bg-gray-700 text-white hover:bg-gray-800 focus:ring-gray-500'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
-              >
-                Continue to Reading App
-              </button>
-              {!canProceed && (
-                <p className="text-gray-500 text-sm mt-2">
-                  Complete reading tests and select preferences to continue
+          <div className="max-w-2xl mx-auto">
+            {/* Normal Reading Test Section */}
+            {currentSection === 'normal' && (
+              <div className="border border-gray-200 rounded-lg p-6">
+                <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                  Normal Reading Speed Test
+                </h2>
+                <p className="text-gray-600 mb-4">
+                  Read {NORMAL_TEXTS.length} passages at your normal reading pace. Click "Start" to begin timing each passage.
                 </p>
-              )}
-            </div>
+                
+                {normalResults.length > 0 && (
+                  <div className="mb-4 p-3 bg-gray-100 rounded-md">
+                    <p className="text-gray-700 text-sm">
+                      Completed: {normalResults.length}/{NORMAL_TEXTS.length} passages
+                      {normalResults.map((result, i) => (
+                        <span key={i} className="ml-2 text-gray-600">
+                          P{i+1}: {result.wpm} WPM
+                        </span>
+                      ))}
+                    </p>
+                  </div>
+                )}
+
+                {!currentTest && !isNormalComplete && (
+                  <button
+                    onClick={() => startReading('normal')}
+                    className="mb-4 bg-gray-700 text-white px-6 py-2 rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                  >
+                    {normalResults.length === 0 ? 'Start Normal Reading Test' : 'Continue Normal Reading Test'}
+                  </button>
+                )}
+
+                {currentTest === 'normal' && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-gray-700 font-medium">
+                        Passage {currentPassageIndex + 1} of {NORMAL_TEXTS.length}
+                      </span>
+                      {testPhase === 'ready' && (
+                        <button
+                          onClick={startTiming}
+                          className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          Start Reading
+                        </button>
+                      )}
+                      {testPhase === 'reading' && (
+                        <button
+                          onClick={finishPassage}
+                          className="bg-red-600 text-white px-6 py-2 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        >
+                          Finish Passage
+                        </button>
+                      )}
+                    </div>
+                    
+                    {testPhase === 'reading' && (
+                      <div className="mb-4 p-2 bg-green-100 rounded-md">
+                        <p className="text-green-800 text-sm font-medium">Timer active - read at your normal pace</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(currentTest === 'normal' || isNormalComplete) && (
+                  <div className="bg-gray-100 p-4 rounded-md text-gray-800 leading-relaxed text-base mb-6">
+                    {getCurrentText() || NORMAL_TEXTS[0]}
+                  </div>
+                )}
+
+                {isNormalComplete && (
+                  <>
+                    <div className="p-4 bg-green-100 rounded-md mb-6">
+                      <p className="text-green-800 font-medium">
+                        Normal reading test complete! Average: {getAverageWpm(normalResults)} WPM
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <button
+                        onClick={handleContinueToNext}
+                        className="bg-gray-700 text-white px-8 py-3 rounded-md text-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                      >
+                        Continue to Skimming Test
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Skimming Reading Test Section */}
+            {currentSection === 'skimming' && (
+              <div className="border border-gray-200 rounded-lg p-6">
+                <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                  Skimming Speed Test
+                </h2>
+                <p className="text-gray-600 mb-4">
+                  Skim through {SKIMMING_TEXTS.length} passages quickly to get the general idea. Don't worry about understanding every detail.
+                </p>
+                
+                {skimmingResults.length > 0 && (
+                  <div className="mb-4 p-3 bg-gray-100 rounded-md">
+                    <p className="text-gray-700 text-sm">
+                      Completed: {skimmingResults.length}/{SKIMMING_TEXTS.length} passages
+                      {skimmingResults.map((result, i) => (
+                        <span key={i} className="ml-2 text-gray-600">
+                          P{i+1}: {result.wpm} WPM
+                        </span>
+                      ))}
+                    </p>
+                  </div>
+                )}
+
+                {!currentTest && !isSkimmingComplete && (
+                  <button
+                    onClick={() => startReading('skimming')}
+                    className="mb-4 bg-purple-600 text-white px-6 py-2 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  >
+                    {skimmingResults.length === 0 ? 'Start Skimming Test' : 'Continue Skimming Test'}
+                  </button>
+                )}
+
+                {currentTest === 'skimming' && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-gray-700 font-medium">
+                        Passage {currentPassageIndex + 1} of {SKIMMING_TEXTS.length}
+                      </span>
+                      {testPhase === 'ready' && (
+                        <button
+                          onClick={startTiming}
+                          className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          Start Skimming
+                        </button>
+                      )}
+                      {testPhase === 'reading' && (
+                        <button
+                          onClick={finishPassage}
+                          className="bg-red-600 text-white px-6 py-2 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        >
+                          Finish Passage
+                        </button>
+                      )}
+                    </div>
+                    
+                    {testPhase === 'reading' && (
+                      <div className="mb-4 p-2 bg-purple-100 rounded-md">
+                        <p className="text-purple-800 text-sm font-medium">Timer active - skim for main ideas only</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(currentTest === 'skimming' || isSkimmingComplete) && (
+                  <div className="bg-gray-100 p-4 rounded-md text-gray-800 leading-relaxed text-base mb-6">
+                    {getCurrentText() || SKIMMING_TEXTS[0]}
+                  </div>
+                )}
+
+                {isSkimmingComplete && (
+                  <>
+                    <div className="p-4 bg-green-100 rounded-md mb-6">
+                      <p className="text-green-800 font-medium">
+                        Skimming test complete! Average: {getAverageWpm(skimmingResults)} WPM
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <button
+                        onClick={handleContinueToNext}
+                        className="bg-gray-700 text-white px-8 py-3 rounded-md text-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                      >
+                        Continue to Genre Preferences
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Genre Selection Section */}
+            {currentSection === 'genres' && (
+              <div className="border border-gray-200 rounded-lg p-6">
+                <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                  Genre Preferences
+                </h2>
+                <p className="text-gray-600 mb-4">
+                  Select your favorite genres for personalized book recommendations (choose at least one):
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                  {GENRES.map((genre) => (
+                    <button
+                      key={genre}
+                      onClick={() => toggleGenre(genre)}
+                      className={`p-3 rounded-md text-sm font-medium transition-colors ${
+                        selectedGenres.includes(genre)
+                          ? 'bg-gray-700 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {genre}
+                    </button>
+                  ))}
+                </div>
+                {selectedGenres.length > 0 && (
+                  <div className="mb-6 p-3 bg-green-100 rounded-md">
+                    <p className="text-green-800 text-sm">
+                      Selected: {selectedGenres.join(', ')}
+                    </p>
+                  </div>
+                )}
+                {hasGenres && (
+                  <div className="text-center">
+                    <button
+                      onClick={handleContinueToNext}
+                      className="bg-gray-700 text-white px-8 py-3 rounded-md text-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                    >
+                      Continue to Theme Preferences
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Theme Selection Section */}
+            {currentSection === 'themes' && (
+              <div className="border border-gray-200 rounded-lg p-6">
+                <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                  Mood & Theme Preferences
+                </h2>
+                <p className="text-gray-600 mb-4">
+                  What kind of emotional tone do you enjoy in your reading? (choose at least one):
+                </p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                  {THEMES.map((theme) => (
+                    <button
+                      key={theme}
+                      onClick={() => toggleTheme(theme)}
+                      className={`p-3 rounded-md text-sm font-medium transition-colors ${
+                        selectedThemes.includes(theme)
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {theme}
+                    </button>
+                  ))}
+                </div>
+                {selectedThemes.length > 0 && (
+                  <div className="mb-6 p-3 bg-green-100 rounded-md">
+                    <p className="text-green-800 text-sm">
+                      Selected: {selectedThemes.join(', ')}
+                    </p>
+                  </div>
+                )}
+                {hasThemes && (
+                  <div className="text-center">
+                    <button
+                      onClick={handleComplete}
+                      className="bg-gray-700 text-white px-8 py-3 rounded-md text-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                    >
+                      Complete Setup
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
