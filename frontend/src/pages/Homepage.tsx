@@ -11,6 +11,7 @@ interface HomepageProps {
   userData: UserData;
   onStartReading: (bookId: string) => void;
   onLogout: () => void;
+  onRetakeTest: () => void;
 }
 
 interface Book {
@@ -45,7 +46,7 @@ const SAMPLE_BOOKS: Book[] = [
   }
 ];
 
-function Homepage({ userData, onStartReading, onLogout }: HomepageProps) {
+function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: HomepageProps) {
   const [books] = useState<Book[]>(SAMPLE_BOOKS);
 
   const formatDate = (timestamp: number) => {
@@ -142,8 +143,11 @@ function Homepage({ userData, onStartReading, onLogout }: HomepageProps) {
           <div className="mt-8 pt-6 border-t border-gray-200">
             <h3 className="text-lg font-medium text-gray-800 mb-4">Quick Actions</h3>
             <div className="space-y-2">
-              <button className="text-gray-600 hover:text-gray-800 text-sm block">
-                Retake Reading Speed Test
+              <button 
+                onClick={onRetakeTest}
+                className="text-gray-600 hover:text-gray-800 text-sm block"
+              >
+                Update Reading Speed & Preferences
               </button>
               <button className="text-gray-600 hover:text-gray-800 text-sm block">
                 Browse Book Library

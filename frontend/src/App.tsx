@@ -8,6 +8,8 @@ interface UserData {
   username: string;
   normalWpm: number;
   skimmingWpm: number;
+  genres: string[];
+  themes: string[];
   timestamp: number;
 }
 
@@ -21,20 +23,23 @@ function App() {
     const savedData = localStorage.getItem('userWpmData');
     if (savedData) {
       const userData = JSON.parse(savedData) as UserData;
-      setUser(userData.username);
-      setUserWpmData(userData);
-      setCurrentPage('homepage');
+      // Only auto-login if user has complete profile
+      if (userData.normalWpm && userData.skimmingWpm && userData.genres && userData.themes) {
+        setUser(userData.username);
+        setUserWpmData(userData);
+        setCurrentPage('homepage');
+      }
     }
   }, []);
 
   const handleAuth = (username: string) => {
     setUser(username);
     
-    // Check if user already has WPM data
+    // Check if user already has complete profile data
     const savedData = localStorage.getItem('userWpmData');
     if (savedData) {
       const userData = JSON.parse(savedData) as UserData;
-      if (userData.username === username && userData.normalWpm && userData.skimmingWpm) {
+      if (userData.username === username && userData.normalWpm && userData.skimmingWpm && userData.genres && userData.themes) {
         setUserWpmData(userData);
         setCurrentPage('homepage');
         return;
@@ -44,11 +49,13 @@ function App() {
     setCurrentPage('landing');
   };
 
-  const handleWpmComplete = (normalWpm: number, skimmingWpm: number) => {
+  const handleWpmComplete = (normalWpm: number, skimmingWpm: number, genres: string[], themes: string[]) => {
     const userData: UserData = {
       username: user!,
       normalWpm,
       skimmingWpm,
+      genres,
+      themes,
       timestamp: Date.now()
     };
     setUserWpmData(userData);
@@ -73,6 +80,10 @@ function App() {
     setCurrentPage('homepage');
   };
 
+  const handleRetakeTest = () => {
+    setCurrentPage('landing');
+  };
+
   if (currentPage === 'auth') {
     return <Auth onAuth={handleAuth} />;
   }
@@ -82,7 +93,7 @@ function App() {
   }
 
   if (currentPage === 'homepage' && userWpmData) {
-    return <Homepage userData={userWpmData} onStartReading={handleStartReading} onLogout={handleLogout} />;
+    return <Homepage userData={userWpmData} onStartReading={handleStartReading} onLogout={handleLogout} onRetakeTest={handleRetakeTest} />;
   }
 
   return <Reader onBackToHomepage={handleBackToHomepage} />;

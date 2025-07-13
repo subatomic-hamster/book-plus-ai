@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 
 interface LandingProps {
   username: string;
-  onComplete: (normalWpm: number, skimmingWpm: number) => void;
+  onComplete: (normalWpm: number, skimmingWpm: number, genres: string[], themes: string[]) => void;
 }
 
 interface TestResult {
@@ -26,6 +26,19 @@ const SKIMMING_TEXTS = [
   "Information overload in the digital age requires efficient reading strategies. With endless streams of articles, emails, and social media posts, readers must quickly determine what deserves attention. Effective scanning involves looking for keywords, headings, and visual cues to identify relevant content. Preview reading helps establish context before diving deeper. The ability to rapidly assess source credibility and content quality has become essential. Readers must also develop skills in filtering information, bookmarking important content for later review, and organizing digital information for easy retrieval. These skills help manage the constant influx of information while maintaining productivity and focus."
 ];
 
+const GENRES = [
+  'Fantasy', 'Science Fiction', 'Mystery', 'Romance', 'Thriller', 'Historical Fiction',
+  'Literary Fiction', 'Horror', 'Biography', 'Self-Help', 'Philosophy', 'Psychology',
+  'Business', 'Health', 'Travel', 'Poetry', 'Drama', 'Adventure', 'Comedy', 'Crime'
+];
+
+const THEMES = [
+  'Dramatic', 'Emotional', 'Angst', 'Uplifting', 'Dark', 'Humorous',
+  'Inspirational', 'Melancholic', 'Suspenseful', 'Romantic', 'Philosophical',
+  'Action-packed', 'Contemplative', 'Heartwarming', 'Intense', 'Peaceful',
+  'Nostalgic', 'Mysterious', 'Empowering', 'Thought-provoking'
+];
+
 function Landing({ username, onComplete }: LandingProps) {
   const [currentTest, setCurrentTest] = useState<'normal' | 'skimming' | null>(null);
   const [currentPassageIndex, setCurrentPassageIndex] = useState(0);
@@ -33,6 +46,8 @@ function Landing({ username, onComplete }: LandingProps) {
   const [normalResults, setNormalResults] = useState<TestResult[]>([]);
   const [skimmingResults, setSkimmingResults] = useState<TestResult[]>([]);
   const [testPhase, setTestPhase] = useState<'ready' | 'reading' | 'complete'>('ready');
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [selectedThemes, setSelectedThemes] = useState<string[]>([]);
 
   const getCurrentText = () => {
     if (currentTest === 'normal') {
@@ -102,6 +117,22 @@ function Landing({ username, onComplete }: LandingProps) {
     return Math.round(total / results.length);
   };
 
+  const toggleGenre = (genre: string) => {
+    setSelectedGenres(prev => 
+      prev.includes(genre) 
+        ? prev.filter(g => g !== genre)
+        : [...prev, genre]
+    );
+  };
+
+  const toggleTheme = (theme: string) => {
+    setSelectedThemes(prev => 
+      prev.includes(theme) 
+        ? prev.filter(t => t !== theme)
+        : [...prev, theme]
+    );
+  };
+
   const handleComplete = () => {
     const normalAvg = getAverageWpm(normalResults);
     const skimmingAvg = getAverageWpm(skimmingResults);
@@ -110,17 +141,20 @@ function Landing({ username, onComplete }: LandingProps) {
       username,
       normalWpm: normalAvg,
       skimmingWpm: skimmingAvg,
+      genres: selectedGenres,
+      themes: selectedThemes,
       timestamp: Date.now(),
       normalResults,
       skimmingResults
     }));
     
-    onComplete(normalAvg, skimmingAvg);
+    onComplete(normalAvg, skimmingAvg, selectedGenres, selectedThemes);
   };
 
   const isNormalComplete = normalResults.length === NORMAL_TEXTS.length;
   const isSkimmingComplete = skimmingResults.length === SKIMMING_TEXTS.length;
-  const canProceed = isNormalComplete && isSkimmingComplete;
+  const hasPreferences = selectedGenres.length > 0 && selectedThemes.length > 0;
+  const canProceed = isNormalComplete && isSkimmingComplete && hasPreferences;
 
   return (
     <div className="min-h-screen bg-white">
@@ -297,17 +331,89 @@ function Landing({ username, onComplete }: LandingProps) {
               )}
             </div>
 
-            {/* Complete Button */}
-            {canProceed && (
-              <div className="text-center">
-                <button
-                  onClick={handleComplete}
-                  className="bg-gray-700 text-white px-8 py-3 rounded-md text-lg font-medium hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
-                >
-                  Continue to Reading App
-                </button>
+            {/* Genre Selection */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                Genre Preferences
+              </h2>
+              <p className="text-gray-600 mb-4">
+                Select your favorite genres for personalized book recommendations (choose at least one):
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {GENRES.map((genre) => (
+                  <button
+                    key={genre}
+                    onClick={() => toggleGenre(genre)}
+                    className={`p-3 rounded-md text-sm font-medium transition-colors ${
+                      selectedGenres.includes(genre)
+                        ? 'bg-gray-700 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {genre}
+                  </button>
+                ))}
               </div>
-            )}
+              {selectedGenres.length > 0 && (
+                <div className="mt-4 p-3 bg-green-100 rounded-md">
+                  <p className="text-green-800 text-sm">
+                    Selected: {selectedGenres.join(', ')}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Theme Selection */}
+            <div className="border border-gray-200 rounded-lg p-6">
+              <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+                Mood & Theme Preferences
+              </h2>
+              <p className="text-gray-600 mb-4">
+                What kind of emotional tone do you enjoy in your reading? (choose at least one):
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {THEMES.map((theme) => (
+                  <button
+                    key={theme}
+                    onClick={() => toggleTheme(theme)}
+                    className={`p-3 rounded-md text-sm font-medium transition-colors ${
+                      selectedThemes.includes(theme)
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {theme}
+                  </button>
+                ))}
+              </div>
+              {selectedThemes.length > 0 && (
+                <div className="mt-4 p-3 bg-green-100 rounded-md">
+                  <p className="text-green-800 text-sm">
+                    Selected: {selectedThemes.join(', ')}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Complete Button */}
+            <div className="text-center">
+              <button
+                onClick={handleComplete}
+                disabled={!canProceed}
+                className={`px-8 py-3 rounded-md text-lg font-medium focus:outline-none focus:ring-2 ${
+                  canProceed
+                    ? 'bg-gray-700 text-white hover:bg-gray-800 focus:ring-gray-500'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                Continue to Reading App
+              </button>
+              {!canProceed && (
+                <p className="text-gray-500 text-sm mt-2">
+                  Complete reading tests and select preferences to continue
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>
