@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import axios from 'axios';
 
 interface UserData {
   username: string;
@@ -15,6 +16,8 @@ interface HomepageProps {
   onStartReading: (bookId: string) => void;
   onLogout: () => void;
   onRetakeTest: () => void;
+  onBrowseBooks: () => void;
+  onShowStats: () => void;
 }
 
 interface Book {
@@ -23,39 +26,75 @@ interface Book {
   author: string;
   progress: number;
   lastRead: string;
+  totalParagraphs?: number;
+  readParagraphs?: number;
 }
 
-const SAMPLE_BOOKS: Book[] = [
-  {
-    id: 'book1',
-    title: 'The Great Gatsby',
-    author: 'F. Scott Fitzgerald',
-    progress: 45,
-    lastRead: '2 days ago'
-  },
-  {
-    id: 'book2',
-    title: 'To Kill a Mockingbird',
-    author: 'Harper Lee',
-    progress: 0,
-    lastRead: 'Never'
-  },
-  {
-    id: 'book3',
-    title: '1984',
-    author: 'George Orwell',
-    progress: 78,
-    lastRead: '1 week ago'
-  }
-];
+interface ReadingProgress {
+  [bookId: string]: {
+    paragraphsRead: number;
+    totalParagraphs: number;
+    lastReadTime: string;
+  };
+}
 
-function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: HomepageProps) {
-  const [books] = useState<Book[]>(SAMPLE_BOOKS);
+function Homepage({ userData, onStartReading, onLogout, onRetakeTest, onBrowseBooks, onShowStats }: HomepageProps) {
+  const [books, setBooks] = useState<Book[]>([]);
+  const [readingProgress, setReadingProgress] = useState<ReadingProgress>({});
+  const [isLoading, setIsLoading] = useState(true);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString();
   };
+
+  // Load books and reading progress
+  useEffect(() => {
+    const loadBooksAndProgress = async () => {
+      try {
+        // Load book info
+        const bookResponse = await axios.get('http://localhost:8000/api/book1/paragraphs');
+        const totalParagraphs = bookResponse.data.total_paragraphs;
+        
+        // Load reading progress from localStorage
+        const savedProgress = localStorage.getItem(`reading_progress_${userData.username}`);
+        let progress: ReadingProgress = {};
+        
+        if (savedProgress) {
+          progress = JSON.parse(savedProgress);
+        }
+        
+        // Calculate progress for book1
+        const book1Progress = progress['book1'] || { paragraphsRead: 0, totalParagraphs, lastReadTime: 'Never' };
+        const progressPercent = totalParagraphs > 0 ? Math.round((book1Progress.paragraphsRead / totalParagraphs) * 100) : 0;
+        
+        // Format last read time
+        const lastRead = book1Progress.lastReadTime === 'Never' ? 'Never' : 
+          new Date(book1Progress.lastReadTime).toLocaleDateString();
+        
+        const booksData: Book[] = [
+          {
+            id: 'book1',
+            title: 'The Once and Future King',
+            author: 'T.H. White',
+            progress: progressPercent,
+            lastRead,
+            totalParagraphs,
+            readParagraphs: book1Progress.paragraphsRead
+          }
+        ];
+        
+        setBooks(booksData);
+        setReadingProgress(progress);
+        setIsLoading(false);
+      } catch (error) {
+        console.error('Failed to load books:', error);
+        setIsLoading(false);
+      }
+    };
+
+    loadBooksAndProgress();
+  }, [userData.username]);
 
   return (
     <div className="min-h-screen bg-white">
@@ -101,8 +140,13 @@ function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: Homepage
           {/* Books Section */}
           <div>
             <h2 className="text-2xl font-semibold text-gray-800 mb-6">Your Books</h2>
-            <div className="space-y-4">
-              {books.map((book) => (
+            {isLoading ? (
+              <div className="flex justify-center py-8">
+                <div className="text-gray-600">Loading your library...</div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {books.map((book) => (
                 <div
                   key={book.id}
                   className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
@@ -138,8 +182,9 @@ function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: Homepage
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Quick Actions */}
@@ -152,10 +197,16 @@ function Homepage({ userData, onStartReading, onLogout, onRetakeTest }: Homepage
               >
                 Update Reading Speed & Preferences
               </button>
-              <button className="text-gray-600 hover:text-gray-800 text-sm block">
+              <button 
+                onClick={onBrowseBooks}
+                className="text-gray-600 hover:text-gray-800 text-sm block"
+              >
                 Browse Book Library
               </button>
-              <button className="text-gray-600 hover:text-gray-800 text-sm block">
+              <button 
+                onClick={onShowStats}
+                className="text-gray-600 hover:text-gray-800 text-sm block"
+              >
                 Reading Statistics
               </button>
             </div>

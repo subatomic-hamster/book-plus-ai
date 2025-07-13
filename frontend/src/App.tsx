@@ -4,6 +4,8 @@ import Auth from './pages/Auth';
 import Landing from './pages/Landing';
 import Homepage from './pages/Homepage';
 import Reader from './pages/Reader';
+import BrowseBooks from './pages/BrowseBooks';
+import ReadingStats from './pages/ReadingStats';
 
 interface UserData {
   username: string;
@@ -17,7 +19,7 @@ interface UserData {
 
 function App() {
   const [user, setUser] = useState<UserData | null>(null);
-  const [currentPage, setCurrentPage] = useState<'auth' | 'landing' | 'homepage' | 'reader'>('auth');
+  const [currentPage, setCurrentPage] = useState<'auth' | 'landing' | 'homepage' | 'reader' | 'browse' | 'stats'>('auth');
   const [currentBookId, setCurrentBookId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -124,6 +126,14 @@ function App() {
     setCurrentPage('landing');
   };
 
+  const handleBrowseBooks = () => {
+    setCurrentPage('browse');
+  };
+
+  const handleShowStats = () => {
+    setCurrentPage('stats');
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -141,7 +151,22 @@ function App() {
   }
 
   if (currentPage === 'homepage' && user) {
-    return <Homepage userData={user} onStartReading={handleStartReading} onLogout={handleLogout} onRetakeTest={handleRetakeTest} />;
+    return <Homepage 
+      userData={user} 
+      onStartReading={handleStartReading} 
+      onLogout={handleLogout} 
+      onRetakeTest={handleRetakeTest}
+      onBrowseBooks={handleBrowseBooks}
+      onShowStats={handleShowStats}
+    />;
+  }
+
+  if (currentPage === 'browse' && user) {
+    return <BrowseBooks onBackToHomepage={handleBackToHomepage} onStartReading={handleStartReading} />;
+  }
+
+  if (currentPage === 'stats' && user) {
+    return <ReadingStats userData={user} onBackToHomepage={handleBackToHomepage} />;
   }
 
   return <Reader onBackToHomepage={handleBackToHomepage} userData={user} />;

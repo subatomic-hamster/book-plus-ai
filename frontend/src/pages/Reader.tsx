@@ -90,29 +90,12 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
   // Function to load a specific paragraph with adaptive content
   const loadParagraph = useCallback(async (index: number) => {
     try {
-      // Load basic paragraph
+      console.log(`Loading paragraph ${index}...`);
+      // Load basic paragraph first
       const basicResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}`);
+      console.log(`Loaded basic content for paragraph ${index}`);
       
-      // Load analyzed version
-      const analyzedResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/analyze`);
-      const analyzed: AnalyzedParagraph = analyzedResponse.data;
-      setAnalyzedParagraphs(prev => new Map(prev.set(index, analyzed)));
-      
-      // Load adaptive content
-      let adaptiveContent: AdaptiveContent | undefined;
-      try {
-        const adaptiveResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/adaptive?version=${contentVersion}`);
-        adaptiveContent = adaptiveResponse.data;
-      } catch (adaptiveErr) {
-        // Fallback to basic content if adaptive fails
-        adaptiveContent = {
-          version: 'full',
-          text: basicResponse.data.text,
-          highlighted_sentences: [],
-          emphasis_type: analyzed.primary_type
-        };
-      }
-      
+      // Set basic paragraph immediately - this ensures content shows up
       setParagraphs(prev => 
         prev.map(p => 
           p.index === index 
@@ -120,15 +103,57 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
                 ...p, 
                 text: basicResponse.data.text, 
                 isLoading: false, 
-                hasError: false,
-                adaptiveContent,
-                contentType: analyzed.primary_type,
-                importanceScore: analyzed.importance_score
+                hasError: false
               }
             : p
         )
       );
+      
+      // Try to load enhanced content in the background (don't block on this)
+      setTimeout(async () => {
+        try {
+          console.log(`Loading enhanced content for paragraph ${index}...`);
+          // Load analyzed version
+          const analyzedResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/analyze`);
+          const analyzed: AnalyzedParagraph = analyzedResponse.data;
+          setAnalyzedParagraphs(prev => new Map(prev.set(index, analyzed)));
+          
+          // Load adaptive content
+          let adaptiveContent: AdaptiveContent | undefined;
+          try {
+            const adaptiveResponse = await axios.get(`http://localhost:8000/api/book1/paragraphs/${index}/adaptive?version=${contentVersion}`);
+            adaptiveContent = adaptiveResponse.data;
+            console.log(`Loaded adaptive content for paragraph ${index}`);
+          } catch (adaptiveErr) {
+            console.warn(`Adaptive content not available for paragraph ${index}, using basic content`);
+            // Create basic adaptive content
+            adaptiveContent = {
+              version: 'full',
+              text: basicResponse.data.text,
+              highlighted_sentences: [],
+              emphasis_type: analyzed.primary_type
+            };
+          }
+          
+          // Update with enhanced content
+          setParagraphs(prev => 
+            prev.map(p => 
+              p.index === index 
+                ? { 
+                    ...p,
+                    adaptiveContent,
+                    contentType: analyzed.primary_type,
+                    importanceScore: analyzed.importance_score
+                  }
+                : p
+            )
+          );
+        } catch (enhancedErr) {
+          console.warn(`Enhanced content not available for paragraph ${index}, using basic content only`);
+        }
+      }, 100); // Small delay to ensure basic content renders first
     } catch (err) {
+      console.error(`Failed to load paragraph ${index}:`, err);
       setParagraphs(prev => 
         prev.map(p => 
           p.index === index 
@@ -151,9 +176,12 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
   // Initial load - get total paragraphs and load first few
   useEffect(() => {
     const initializeReader = async () => {
+      console.log('Initializing Reader component...');
       try {
+        console.log('Loading book metadata...');
         const response = await axios.get('http://localhost:8000/api/book1/paragraphs');
         const total = response.data.total_paragraphs;
+        console.log(`Found ${total} paragraphs`);
         setTotalParagraphs(total);
         
         // Load first 5 paragraphs initially
@@ -164,12 +192,15 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
           hasError: false
         }));
         
+        console.log('Setting initial paragraph placeholders...');
         setParagraphs(initialParagraphs);
         setIsInitialLoading(false);
         
         // Load the initial paragraphs
+        console.log('Loading initial paragraphs...');
         initialParagraphs.forEach(p => loadParagraph(p.index));
       } catch (err) {
+        console.error('Failed to initialize reader:', err);
         setError('Failed to initialize reader');
         setIsInitialLoading(false);
       }
@@ -177,6 +208,39 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
 
     initializeReader();
   }, [loadParagraph]);
+
+  // Update reading progress
+  const updateReadingProgress = useCallback((paragraphIndex: number) => {
+    if (!userData?.username) return;
+
+    const progressKey = `reading_progress_${userData.username}`;
+    const currentProgress = JSON.parse(localStorage.getItem(progressKey) || '{}');
+    
+    if (!currentProgress['book1']) {
+      currentProgress['book1'] = {
+        paragraphsRead: 0,
+        totalParagraphs,
+        lastReadTime: new Date().toISOString(),
+        readSections: new Set()
+      };
+    }
+
+    // Track unique paragraphs read
+    if (!currentProgress['book1'].readSections) {
+      currentProgress['book1'].readSections = new Set();
+    }
+
+    // Convert to array to handle localStorage serialization
+    const readSections = new Set(currentProgress['book1'].readSections);
+    if (!readSections.has(paragraphIndex)) {
+      readSections.add(paragraphIndex);
+      currentProgress['book1'].readSections = Array.from(readSections);
+      currentProgress['book1'].paragraphsRead = readSections.size;
+      currentProgress['book1'].lastReadTime = new Date().toISOString();
+      
+      localStorage.setItem(progressKey, JSON.stringify(currentProgress));
+    }
+  }, [userData, totalParagraphs]);
 
   // Analytics: Start section timing
   const startSectionTiming = useCallback((paragraphIndex: number) => {
@@ -267,6 +331,9 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
             updateReadingPattern(paragraphIndex, wpm, dwellTime);
           }
           
+          // Update reading progress
+          updateReadingProgress(paragraphIndex);
+          
           return {
             ...st,
             endTime: now,
@@ -279,7 +346,7 @@ function Reader({ onBackToHomepage, userData }: ReaderProps) {
       });
       return { ...prev, sectionTimings: updated };
     });
-  }, [calculateSectionWPM, updateParagraphClassification]);
+  }, [calculateSectionWPM, updateParagraphClassification, updateReadingProgress]);
 
   // Analytics: Track scroll behavior
   const trackScrollEvent = useCallback((scrollTop: number) => {
